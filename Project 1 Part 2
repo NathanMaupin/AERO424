@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Nathan Maupin
+AERO 424-500
+Project 1 - Part 2
+Due: 11/12/23
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+
+
+# Planetary Constants - Earth
+G = 6.67430e-11  # gravitational constant (m^3 kg^-1 s^-2)
+M_earth = 5.972e24  # Earth mass (kg)
+R_earth = 6371e3  # Earth radius (m)
+r_orbit =  7000e3  # orbital radius (from the center of the Earth)
+omega0 = np.sqrt(G * M_earth / r_orbit**3) 
+R_e = 6371e3  # Earth's radius in meters
+
+
+# Satellite Parameters - Moments of Inertia
+I11 = 4500  # kg-m^2
+I22 = 6000  # kg-m^2
+I33 = 7000  # kg-m^2
+
+# Initial Orientation Parameters
+psi, phi, theta = np.array([0.09, -0.07, 0.15])
+omega_B_initial = np.array([-0.0008, 0.0006, 0.00085])
+initial_conditions = np.array([phi, psi, theta, *omega_B_initial])
+
+#Inital Environment Parameters
+omega_e = 7.29212e-5 #rad/s - Earth's angular velocity
+m_hat = [-0.0558462, 0.169857, -0.983885]  # Normalized magnetic moment vector
+B_0 = 3.12e-5  # Earth's magnetic field strength at the equator in Tesla
+
+#Orbit Parameters
+a = 7000e3 #m - semi-major axis
+i = np.deg2rad(83) # inclination = 83 deg
+w_0 = 7546.05/a 
+RAAN= 0 # RAAN
+u = 0 # Argument of latitude
+
+
+#Gravity Gradient Torque
+def gravity_gradient(phi, psi, theta):
+    MG1 = 3 * omega0**2 * ((np.cos(psi) * np.sin(phi)) * (-np.sin(theta) * np.cos(phi) + np.cos(theta) * np.sin(psi) * np.sin(phi)) * (I33 - I22))
+    MG2 = 3 * omega0**2 * ((np.cos(psi) * np.sin(phi)) * (np.cos(theta) * np.cos(phi) + np.sin(theta) * np.sin(psi) * np.sin(phi)) * (I11 - I33))
+    MG3 = 3 * omega0**2 * ((np.cos(theta) * np.cos(phi) + np.sin(theta) * np.sin(psi) * np.sin(phi)) * (-np.sin(theta) * np.cos(phi) + np.cos(theta) * np.sin(psi) * np.sin(phi)) * (I22 - I11))        
+    return np.array([MG1, MG2, MG3])
+
+
+#Electromagnetic Torque - referenced hw 3 code
+def electromagnetic(t, phi, psi, theta):
+    r_ecef = np.array([1, 0, 0]) * 629e3
+    r_mag = np.linalg.norm(r_ecef)
+    r_hat = r_ecef / r_mag
+    
+    # Rotation matrix from ECI to ECEF frame
+    ECI2ECEF = np.array([[np.cos(-omega_e * t), -np.sin(-omega_e * t), 0],
+                         [np.sin(-omega_e * t), np.cos(-omega_e * t), 0],
+                         [0, 0, 1]
+                         ])
+    
+    ECEF2ECI = np.transpose(ECI2ECEF)
+    
+    ECI2Orbit = np.array([
+        [-np.sin(u)*np.cos(RAAN) - np.cos(u)*np.cos(i)*np.cos(RAAN), -np.sin(u)*np.sin(RAAN)+np.cos(u)*np.cos(i)*np.cos(RAAN), np.cos(u)*np.sin(i)],
+        [-np.sin(i)*np.sin(RAAN), np.sin(i)*np.cos(RAAN), -np.cos(i)],
+        [-np.cos(u)*np.cos(RAAN)+np.sin(u)*np.cos(i)*np.sin(RAAN), -np.cos(u)*np.sin(RAAN) - np.sin(u)*np.cos(i)*np.cos(RAAN), -np.sin(u)*np.sin(i)]
+    ])
+    
+    #1-2-3 Rotation Matrix
+    Body2Orbit = np.array([
+        [np.cos(psi)*np.cos(theta), np.cos(psi)*np.sin(theta)*np.sin(phi)-np.sin(psi)*np.cos(phi), np.cos(psi)*np.sin(theta)*np.cos(phi)+np.sin(psi)*np.sin(phi)],
+        [np.sin(psi)*np.cos(theta), np.sin(psi)*np.sin(theta)*np.sin(phi)+np.cos(psi)*np.cos(phi), np.sin(psi)*np.sin(theta)*np.cos(phi)-np.cos(psi)*np.sin(phi)],
+        [-np.sin(theta), np.cos(theta)*np.sin(phi), np.cos(theta)*np.cos(phi)]
+        ])
+    
+    Orbit2Body = np.transpose(Body2Orbit)
+            
+    # Transform Magnetic Field to Satellite Body Frame
+    m_eci = np.dot(ECEF2ECI, m_hat)
+    m_orbit = np.dot(ECI2Orbit, m_eci)
+    m_body = np.dot(Orbit2Body, m_orbit)
+    
+    B_body = B_0 * (R_e / r_mag)**3 * (3 * (np.dot(m_body, r_hat)) * r_hat - m_body)
+    
+    # Store magnetic field magnitudes in body frame
+    M = 3 * np.array([1, 1, 1])  # 3 ampere-m^2 aligned with pitch axis
+  
+    # Calculate Torque
+    torque = np.cross(M, B_body)
+    
+    return torque
+
+
+#Solar Pressure Torque - 
+def solar_torque():
+    return True
+
+    
+# Dynamics function for ODE solver
+def satellte_angular_rates(t, y):
+    
+    phi, psi, theta, omega1, omega2, omega3 = y
+    
+    MG = gravity_gradient(phi, psi, theta)
+    #SR = compute_solar_torque(t, 2023, 3, 21, 12, 0, 0)
+    EM = electromagnetic(t, phi, psi, theta)
+    
+    # Euler's equations of motion
+    tau1 = MG[0] + EM[0] 
+    tau2 = MG[1] + EM[1]
+    tau3 = MG[2] + EM[2]
+    
+    """
+    # Euler's equations of motion
+    tau1 = 0  # Assuming no external torques for simplicity
+    tau2 = 0
+    tau3 = 0
+    """
+    
+    dot_omega1 = (tau1 - (I33 - I22) * omega2 * omega3) / I11
+    dot_omega2 = (tau2 - (I11 - I33) * omega1 * omega3) / I22
+    dot_omega3 = (tau3 - (I22 - I11) * omega1 * omega2) / I33
+    
+    # Angle rate equations
+    dot_phi = (omega1 * np.sin(theta) + omega2 * np.cos(theta) - omega0 * np.sin(psi) * np.cos(phi)) / np.cos(psi)
+    dot_psi = (omega1 * np.cos(theta) - omega2 * np.sin(theta)) + omega0 * np.sin(phi)
+    dot_theta = (omega1 * np.sin(theta) + omega2 * np.cos(theta)) * np.tan(psi) - omega0 * np.cos(phi) / np.cos(psi) + omega3
+    
+    return [dot_phi, dot_psi, dot_theta, dot_omega1, dot_omega2, dot_omega3]
+
+
+
+
+
+# Integrate dynamics over 3 orbits
+T_orbit = 2 * np.pi / omega0  # Orbital period
+T_orbit = (2 * np.pi*r_orbit) / np.sqrt((G*M_earth)/r_orbit)
+time_span = (0, 3 * T_orbit)
+solution = solve_ivp(satellte_angular_rates, time_span, initial_conditions, t_eval=np.linspace(*time_span, 1000))
+
+""" Plot angles """
+plt.figure(figsize=(12, 8))
+
+plt.subplot(3, 1, 1)
+plt.plot(solution.t / T_orbit, np.degrees(solution.y[0]), label='Roll ($\phi$)')
+plt.ylabel('Angle (degrees)')
+plt.legend()
+plt.title("Satellite Orientation")
+
+plt.subplot(3, 1, 2)
+plt.plot(solution.t / T_orbit, np.degrees(solution.y[1]), label='Yaw ($\psi$)')
+plt.ylabel('Angle (degrees)')
+plt.legend()
+
+plt.subplot(3, 1, 3)
+plt.plot(solution.t / T_orbit, np.degrees(solution.y[2]), label='Pitch ($\theta$)')
+plt.xlabel('Orbit Number')
+plt.ylabel('Angle (degrees)')
+plt.legend()
+
+plt.tight_layout()
+plt.show()
