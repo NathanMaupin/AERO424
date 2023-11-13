@@ -34,14 +34,23 @@ initial_conditions = np.array([phi, psi, theta, *omega_B_initial])
 #Inital Environment Parameters
 omega_e = 7.29212e-5 #rad/s - Earth's angular velocity
 m_hat = [-0.0558462, 0.169857, -0.983885]  # Normalized magnetic moment vector
+m_hat = [-0.983885,-0.0558462, 0.169857]
 B_0 = 3.12e-5  # Earth's magnetic field strength at the equator in Tesla
 
 #Orbit Parameters
 a = 7000e3 #m - semi-major axis
 i = np.deg2rad(83) # inclination = 83 deg
 w_0 = 7546.05/a 
-RAAN= 0 # RAAN
+RAAN = np.deg2rad(-70) # RAAN
 u = 0 # Argument of latitude
+
+#Solar Parameters
+P = 4.644e-6  # Solar radiation pressure in N/m^2
+plate_areas = np.array([5, 7, 7])
+plate_normals = np.array([[0, 0, 1], [0, np.sin(np.deg2rad(30)), np.cos(np.deg2rad(30))], [0, np.sin(np.deg2rad(30)), np.cos(np.deg2rad(30))]])
+plate_center_of_mass = np.array([[0.1, 0.1, 0], [2, 0, 0], [-2, 0, 0]])
+plate_spec = np.array([0.8, 0.2, 0.2])
+plate_diffus = np.array([0.1, 0.1, 0.1])
 
 
 #Gravity Gradient Torque
@@ -54,7 +63,7 @@ def gravity_gradient(phi, psi, theta):
 
 #Electromagnetic Torque - referenced hw 3 code
 def electromagnetic(t, phi, psi, theta):
-    r_ecef = np.array([1, 0, 0]) * 629e3
+    r_ecef = np.array([1, 0, 0]) * a
     r_mag = np.linalg.norm(r_ecef)
     r_hat = r_ecef / r_mag
     
@@ -66,21 +75,20 @@ def electromagnetic(t, phi, psi, theta):
     
     ECEF2ECI = np.transpose(ECI2ECEF)
     
+    #3-1-3 Rotation Matrix
     ECI2Orbit = np.array([
-        [-np.sin(u)*np.cos(RAAN) - np.cos(u)*np.cos(i)*np.cos(RAAN), -np.sin(u)*np.sin(RAAN)+np.cos(u)*np.cos(i)*np.cos(RAAN), np.cos(u)*np.sin(i)],
-        [-np.sin(i)*np.sin(RAAN), np.sin(i)*np.cos(RAAN), -np.cos(i)],
-        [-np.cos(u)*np.cos(RAAN)+np.sin(u)*np.cos(i)*np.sin(RAAN), -np.cos(u)*np.sin(RAAN) - np.sin(u)*np.cos(i)*np.cos(RAAN), -np.sin(u)*np.sin(i)]
-    ])
-    
-    #1-2-3 Rotation Matrix
-    Body2Orbit = np.array([
-        [np.cos(psi)*np.cos(theta), np.cos(psi)*np.sin(theta)*np.sin(phi)-np.sin(psi)*np.cos(phi), np.cos(psi)*np.sin(theta)*np.cos(phi)+np.sin(psi)*np.sin(phi)],
-        [np.sin(psi)*np.cos(theta), np.sin(psi)*np.sin(theta)*np.sin(phi)+np.cos(psi)*np.cos(phi), np.sin(psi)*np.sin(theta)*np.cos(phi)-np.cos(psi)*np.sin(phi)],
-        [-np.sin(theta), np.cos(theta)*np.sin(phi), np.cos(theta)*np.cos(phi)]
+        [np.cos(u)*np.cos(RAAN)-np.sin(u)*np.cos(i)*np.sin(RAAN), np.cos(u)*np.sin(RAAN)+np.sin(u)*np.cos(i)*np.cos(RAAN), np.sin(u)*np.sin(i)],
+        [-np.sin(u)*np.cos(RAAN)-np.cos(u)*np.cos(i)*np.sin(RAAN), -np.sin(u)*np.sin(RAAN)+np.cos(u)*np.cos(i)*np.cos(RAAN), np.cos(u)*np.sin(i)],
+        [np.sin(i)*np.sin(RAAN), -np.sin(i)*np.cos(RAAN), np.cos(i)]
         ])
     
-    Orbit2Body = np.transpose(Body2Orbit)
-            
+    #2-1-3 Rotation Matrix
+    Orbit2Body = np.array([
+        [np.cos(theta)*np.cos(phi)+np.sin(theta)*np.sin(psi)*np.sin(phi), np.sin(theta)*np.cos(psi), -np.cos(theta)*np.sin(phi)+np.sin(theta)*np.sin(psi)*np.cos(phi)],
+        [-np.sin(theta)*np.cos(phi)+np.cos(theta)*np.sin(psi)*np.sin(phi), np.cos(theta)*np.cos(psi), np.sin(theta)*np.sin(phi)+np.cos(theta)*np.sin(psi)*np.cos(phi)],
+        [np.cos(psi)*np.sin(phi), -np.sin(psi), np.cos(psi)*np.cos(phi)]
+        ])
+                
     # Transform Magnetic Field to Satellite Body Frame
     m_eci = np.dot(ECEF2ECI, m_hat)
     m_orbit = np.dot(ECI2Orbit, m_eci)
@@ -97,9 +105,63 @@ def electromagnetic(t, phi, psi, theta):
     return torque
 
 
-#Solar Pressure Torque - 
-def solar_torque():
-    return True
+def calculate_s_hat(t, phi, psi, theta):
+    omega_r = 2*np.pi/(365*24*60*60)
+    tilt = np.deg2rad(23.5)
+    
+    R3_w_0 = np.array([
+        [np.cos(w_0*t), np.sin(w_0*t), 0],
+        [-np.sin(w_0*t), np.cos(w_0*t), 0],
+        [0, 0, 1]
+        ])
+
+    R1_i = np.array([
+        [1, 0, 0],
+        [0, np.cos(i), np.sin(i)],
+        [0, -np.sin(i), np.cos(i)]
+        ])
+
+    R3_RAAN = np.array([
+        [np.cos(RAAN), np.sin(RAAN), 0],
+        [-np.sin(RAAN), np.cos(RAAN), 0],
+        [0, 0, 1]
+        ])
+
+    R1_tilt = np.array([
+        [1, 0, 0],
+        [0, np.cos(tilt), np.sin(tilt)],
+        [0, -np.sin(tilt), np.cos(tilt)]
+        ])   
+    
+    Orbit2Body = np.array([
+        [np.cos(theta)*np.cos(phi)+np.sin(theta)*np.sin(psi)*np.sin(phi), np.sin(theta)*np.cos(psi), -np.cos(theta)*np.sin(phi)+np.sin(theta)*np.sin(psi)*np.cos(phi)],
+        [-np.sin(theta)*np.cos(phi)+np.cos(theta)*np.sin(psi)*np.sin(phi), np.cos(theta)*np.cos(psi), np.sin(theta)*np.sin(phi)+np.cos(theta)*np.sin(psi)*np.cos(phi)],
+        [np.cos(psi)*np.sin(phi), -np.sin(psi), np.cos(psi)*np.cos(phi)]
+        ])
+    
+    s_hat_ecliptic = np.array([np.cos(omega_r*t), np.sin(omega_r*t), 0])
+    
+    meh1  = np.dot(s_hat_ecliptic, R1_tilt)
+    meh2 = np.dot(meh1, R3_RAAN)
+    meh3 = np.dot(meh2, R1_i)
+    meh4 = np.dot(meh3, R3_w_0)
+    s_hat_body = np.dot(meh4, Orbit2Body)
+    
+    return s_hat_body
+
+
+#Solar Pressure Torque  
+def solar_torque(t, phi, psi, theta):
+    s_hat = calculate_s_hat(t, phi, psi, theta)
+    total_torque = np.zeros(3)
+    for i in range(3):
+        n_hat = plate_normals[i]
+        A = plate_areas[i]
+        r = plate_center_of_mass[i]
+        force = P * A * (np.dot(n_hat, s_hat)) * ((1 - plate_spec[i]) * s_hat + (plate_spec[i] + 2/3 * plate_diffus[i]) * n_hat)
+        torque = np.cross(r, force)
+        total_torque += torque
+    return total_torque
 
     
 # Dynamics function for ODE solver
@@ -108,15 +170,20 @@ def satellte_angular_rates(t, y):
     phi, psi, theta, omega1, omega2, omega3 = y
     
     MG = gravity_gradient(phi, psi, theta)
-    #SR = compute_solar_torque(t, 2023, 3, 21, 12, 0, 0)
+    SR = solar_torque(t, phi, psi, theta)
     EM = electromagnetic(t, phi, psi, theta)
     
     # Euler's equations of motion
-    tau1 = MG[0] + EM[0] 
-    tau2 = MG[1] + EM[1]
-    tau3 = MG[2] + EM[2]
+    tau1 = MG[0] + EM[0] + SR[0]
+    tau2 = MG[1] + EM[1] + SR[1]
+    tau3 = MG[2] + EM[2] + SR[2]
     
     """
+    tau1 = MG[0]
+    tau2 = MG[1]
+    tau3 = MG[2]
+
+    
     # Euler's equations of motion
     tau1 = 0  # Assuming no external torques for simplicity
     tau2 = 0
@@ -133,9 +200,6 @@ def satellte_angular_rates(t, y):
     dot_theta = (omega1 * np.sin(theta) + omega2 * np.cos(theta)) * np.tan(psi) - omega0 * np.cos(phi) / np.cos(psi) + omega3
     
     return [dot_phi, dot_psi, dot_theta, dot_omega1, dot_omega2, dot_omega3]
-
-
-
 
 
 # Integrate dynamics over 3 orbits
